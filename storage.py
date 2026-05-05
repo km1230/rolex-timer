@@ -22,20 +22,60 @@ class DataStore:
         if not self.data_file.exists():
             self._save_data({
                 'projects': [],
-                'tasks': [],
-                'active_task_id': None
+                'tasks': []
             })
 
     def _load_data(self) -> dict:
-        """Load data from JSON file."""
+        """Load data from JSON file with migration."""
         try:
             with open(self.data_file, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+
+            # MIGRATION: Remove active_task_id if present
+            if 'active_task_id' in data:
+                active_id = data.pop('active_task_id')
+
+                # If there was an active task, mark it appropriately
+                if active_id:
+                    for task in data.get('tasks', []):
+                        if task['id'] == active_id:
+                            # Check if it was running or paused
+                            if task.get('time_entries'):
+                                last_entry = task['time_entries'][-1]
+                                if not last_entry.get('end_time'):
+                                    # Was running -> mark as running
+                                    task['state'] = 'running'
+                                else:
+                                    # Was paused -> mark as stopped
+                                    task['state'] = 'stopped'
+
+            # MIGRATION: Add state to tasks that don't have it
+            for task in data.get('tasks', []):
+                if 'state' not in task:
+                    # Determine state based on existing data
+                    if task.get('time_entries'):
+                        last_entry = task['time_entries'][-1]
+                        if last_entry.get('end_time'):
+                            task['state'] = 'stopped'
+                        else:
+                            task['state'] = 'running'
+                    else:
+                        task['state'] = 'stopped'
+
+                # MIGRATION: Remove paused_at from time entries
+                for entry in task.get('time_entries', []):
+                    if 'paused_at' in entry:
+                        # If it was paused, use paused_at as end_time if no end_time
+                        if entry['paused_at'] and not entry.get('end_time'):
+                            entry['end_time'] = entry['paused_at']
+                        del entry['paused_at']
+
+            return data
+
         except (json.JSONDecodeError, FileNotFoundError):
             return {
                 'projects': [],
-                'tasks': [],
-                'active_task_id': None
+                'tasks': []
             }
 
     def _save_data(self, data: dict):
@@ -88,12 +128,6 @@ class DataStore:
         # Remove associated tasks
         data['tasks'] = [t for t in data['tasks'] if t['project_id'] != project['id']]
 
-        # Clear active task if it belonged to this project
-        if data.get('active_task_id'):
-            active_task = next((t for t in data['tasks'] if t['id'] == data['active_task_id']), None)
-            if not active_task:
-                data['active_task_id'] = None
-
         self._save_data(data)
         return True
 
@@ -124,16 +158,26 @@ class DataStore:
 
         self._save_data(data)
 
-    def get_active_task_id(self) -> Optional[str]:
-        """Get the ID of the currently active task."""
-        data = self._load_data()
-        return data.get('active_task_id')
+    def get_running_task(self) -> Optional[Task]:
+        """Get the currently running task (if any)."""
+        tasks = self.get_tasks()
+        running_tasks = [t for t in tasks if t.is_running()]
 
-    def set_active_task_id(self, task_id: Optional[str]):
-        """Set the active task ID."""
-        data = self._load_data()
-        data['active_task_id'] = task_id
-        self._save_data(data)
+        if len(running_tasks) > 1:
+            # Data corruption - multiple running tasks
+            raise ValueError("Data corruption: Multiple running tasks found")
+
+        return running_tasks[0] if running_tasks else None
+
+    def get_stopped_tasks(self) -> List[Task]:
+        """Get all stopped tasks, sorted by last activity time (most recent first)."""
+        tasks = self.get_tasks()
+        stopped_tasks = [t for t in tasks if t.is_stopped()]
+
+        # Sort by last activity time, most recent first
+        stopped_tasks.sort(key=lambda t: t.last_activity_time() or '', reverse=True)
+
+        return stopped_tasks
 
     def get_task_by_id(self, task_id: str) -> Optional[Task]:
         """Get a task by ID."""

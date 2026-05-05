@@ -6,7 +6,7 @@ A terminal-based time tracking tool for logging time against projects.
 ## Features
 
 - 📊 Project management (add, list, delete)
-- ⏱️ Timer controls (start, pause, resume, stop)
+- ⏱️ Timer controls (start, stop, resume)
 - 📝 Task descriptions
 - 📈 Time logs and summaries
 - 💾 JSON file storage
@@ -80,14 +80,16 @@ rolex start "Client Work" -d "Implementing new feature"
 # Check timer status
 rolex status
 
-# Pause the timer
-rolex pause
+# Stop the timer (keeps it resumable)
+rolex stop
 
-# Resume the timer
+# Resume a stopped timer (interactive menu with ↑↓ arrow keys)
 rolex resume
 
-# Stop the timer
-rolex stop
+# The arrow key menu will appear if you have multiple stopped tasks:
+# → [Client Work] Implementing new feature | 2h 30m | 2026-05-05 14:30
+#   [Internal] Code review | 45m | 2026-05-05 13:15
+# Use ↑↓ to navigate, Enter to select, q to quit
 ```
 
 ### Reporting
@@ -95,6 +97,9 @@ rolex stop
 ```bash
 # View all time logs
 rolex log
+
+# View compact one-line format with task IDs
+rolex log --compact
 
 # View logs for a specific project
 rolex log --project "Client Work"
@@ -109,21 +114,41 @@ rolex log --week
 rolex summary
 ```
 
+### Task Management
+
+```bash
+# Delete a stopped task interactively (arrow key menu)
+rolex delete
+
+# The arrow key menu lets you select which task to delete:
+# → [Client Work] Old task | 30m | 2026-05-05 10:00
+#   [Internal] Finished work | 1h | 2026-05-05 09:00
+# Use ↑↓ to navigate, Enter to select, q to quit
+
+# Or delete by ID directly (use first 8 characters from compact log)
+rolex delete <task-id>
+
+# Example workflow:
+rolex log --compact          # Find task ID
+rolex delete 7e9585ef        # Delete specific task
+```
+
 ## Data Storage
 
 Time tracking data is stored in `~/.rolex-timer/data.json`
 
 ## Example Workflow
 
+### Single Task Workflow
 ```bash
 # Setup
 rolex project add "Client Work"
 rolex project add "Internal"
 
-# Track time
+# Track time on one task
 rolex start "Client Work" -d "Implementing authentication"
 # ... work for a while ...
-rolex pause
+rolex stop
 # ... take a break ...
 rolex resume
 # ... continue working ...
@@ -134,10 +159,37 @@ rolex log
 rolex summary
 ```
 
+### Multiple Task Workflow (Harvest-style)
+```bash
+# Work on first task
+rolex start "Client Work" -d "Implementing authentication"
+# ... work for 2 hours ...
+rolex stop
+
+# Switch to different task
+rolex start "Internal" -d "Code review"
+# ... work for 30 minutes ...
+rolex stop
+
+# Resume first task (arrow key menu appears)
+rolex resume
+# Shows interactive menu:
+# → [Client Work] Implementing authentication | 2h 15m | 2026-05-05 14:30
+#   [Internal] Code review | 30m | 2026-05-05 16:00
+# Use ↑↓ to navigate, Enter to select
+
+# Continue working on first task
+rolex stop
+
+# View all tracked time
+rolex summary
+```
+
 ## Requirements
 
 - Python 3.7+
 - click library
+- simple-term-menu library
 
 ## License
 

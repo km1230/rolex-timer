@@ -4,6 +4,7 @@
 import click
 from datetime import datetime, timedelta
 from typing import Optional
+from simple_term_menu import TerminalMenu
 from timer import TimerManager
 from storage import DataStore
 from models import Project
@@ -99,83 +100,146 @@ def start(project_name, description):
 
 
 @cli.command()
-def pause():
-    """Pause the current timer."""
+@click.option('--task-id', help='Specific task ID to resume')
+def resume(task_id):
+    """Resume a stopped timer (use ↑↓ arrows to select)."""
     manager = TimerManager()
-    success, message = manager.pause_timer()
+    store = DataStore()
+
+    # If no task_id provided, show stopped tasks and prompt
+    if not task_id:
+        stopped_tasks = store.get_stopped_tasks()
+
+        if not stopped_tasks:
+            click.echo(click.style("✗ No stopped tasks to resume.", fg='red'))
+            return
+
+        if len(stopped_tasks) == 1:
+            # Auto-select if only one stopped task
+            task_id = stopped_tasks[0].id
+        else:
+            # Build menu options
+            projects = {p.id: p for p in store.get_projects()}
+            menu_items = []
+
+            for task in stopped_tasks:
+                proj = projects.get(task.project_id)
+                project_name = proj.name if proj else "Unknown"
+                duration = format_duration(task.get_total_duration())
+
+                # Show last activity time
+                last_time = ""
+                if task.time_entries:
+                    last_entry = task.time_entries[-1]
+                    if last_entry.end_time:
+                        last_dt = datetime.fromisoformat(last_entry.end_time)
+                        last_time = last_dt.strftime("%Y-%m-%d %H:%M")
+
+                menu_items.append(f"[{project_name}] {task.description} | {duration} | {last_time}")
+
+            # Show interactive menu
+            click.echo(click.style("\nSelect task to resume (use ↑↓ arrows, Enter to select, q to quit):", bold=True))
+            terminal_menu = TerminalMenu(
+                menu_items,
+                title="Stopped Tasks:",
+                menu_cursor="→ ",
+                menu_cursor_style=("fg_green", "bold"),
+                menu_highlight_style=("bg_green", "fg_black"),
+                cycle_cursor=True,
+                clear_screen=False,
+            )
+
+            menu_entry_index = terminal_menu.show()
+
+            if menu_entry_index is None:
+                click.echo("\nCancelled.")
+                return
+
+            task_id = stopped_tasks[menu_entry_index].id
+
+    # Resume the selected task
+    success, message = manager.resume_timer(task_id=task_id)
 
     if success:
-        click.echo(click.style(f"✓ {message}", fg='yellow'))
-    else:
-        click.echo(click.style(f"✗ {message}", fg='red'))
+        task = store.get_task_by_id(task_id)
+        projects = {p.id: p for p in store.get_projects()}
+        project = projects.get(task.project_id)
 
-
-@cli.command()
-def resume():
-    """Resume a paused timer."""
-    manager = TimerManager()
-    success, message = manager.resume_timer()
-
-    if success:
-        click.echo(click.style(f"✓ {message}", fg='green'))
+        click.echo(click.style(f"✓ Timer resumed", fg='green'))
+        click.echo(f"  Project: {click.style(project.name if project else 'Unknown', fg='cyan')}")
+        click.echo(f"  Task: {task.description}")
     else:
         click.echo(click.style(f"✗ {message}", fg='red'))
 
 
 @cli.command()
 def stop():
-    """Stop and finalize the current timer."""
+    """Stop the current timer (keeps it resumable)."""
     manager = TimerManager()
     success, message, task = manager.stop_timer()
 
     if success:
-        duration = format_duration(task.total_duration)
-        click.echo(click.style(f"✓ {message}", fg='green'))
-        click.echo(f"  Total time: {click.style(duration, fg='cyan', bold=True)}")
+        duration = format_duration(task.get_total_duration())
+        click.echo(click.style(f"✓ Timer stopped", fg='yellow'))
+        click.echo(f"  Time tracked: {click.style(duration, fg='cyan', bold=True)}")
+        click.echo(click.style("  (Use 'rolex resume' to continue this task)", dim=True))
     else:
         click.echo(click.style(f"✗ {message}", fg='red'))
 
 
 @cli.command()
 def status():
-    """Show current timer status."""
+    """Show current timer status and stopped tasks."""
     manager = TimerManager()
-    has_active, status_text, task, project = manager.get_status()
+    store = DataStore()
+    has_running, status_text, running_task, project, stopped_tasks = manager.get_status()
 
-    if not has_active:
-        click.echo(click.style("No active timer.", dim=True))
-        return
+    # Display running task (if any)
+    if has_running:
+        click.echo(click.style("\nRunning Timer:", bold=True))
+        click.echo(click.style("─" * 50, dim=True))
 
-    # Display status
-    click.echo(click.style("\nTimer Status:", bold=True))
-    click.echo(click.style("─" * 50, dim=True))
+        if project:
+            click.echo(f"  Project: {click.style(project.name, fg='cyan', bold=True)}")
 
-    if project:
-        click.echo(f"  Project: {click.style(project.name, fg='cyan', bold=True)}")
+        click.echo(f"  Task: {running_task.description}")
+        click.echo(f"  Status: {click.style('RUNNING', fg='green', bold=True)}")
 
-    click.echo(f"  Task: {task.description}")
-
-    if status_text == "running":
-        status_display = click.style("RUNNING", fg='green', bold=True)
-    elif status_text == "paused":
-        status_display = click.style("PAUSED", fg='yellow', bold=True)
+        duration = running_task.get_current_duration()
+        formatted_duration = format_duration(duration)
+        click.echo(f"  Elapsed: {click.style(formatted_duration, fg='cyan', bold=True)}")
+        click.echo()
     else:
-        status_display = click.style("STOPPED", fg='red', bold=True)
+        click.echo(click.style("No running timer.", dim=True))
+        click.echo()
 
-    click.echo(f"  Status: {status_display}")
+    # Display stopped tasks
+    if stopped_tasks:
+        click.echo(click.style(f"Stopped Tasks ({len(stopped_tasks)}):", bold=True))
+        click.echo(click.style("─" * 80, dim=True))
 
-    # Show elapsed time
-    duration = task.get_current_duration()
-    formatted_duration = format_duration(duration)
-    click.echo(f"  Elapsed: {click.style(formatted_duration, fg='cyan', bold=True)}")
-    click.echo()
+        projects = {p.id: p for p in store.get_projects()}
+
+        for task in stopped_tasks[:5]:  # Show max 5 recent stopped tasks
+            proj = projects.get(task.project_id)
+            project_name = proj.name if proj else "Unknown"
+            duration = format_duration(task.get_total_duration())
+
+            click.echo(f"  [{click.style(project_name, fg='cyan')}] {task.description}")
+            click.echo(f"    Time: {click.style(duration, fg='green')} | {click.style('Use resume to continue', dim=True)}")
+
+        if len(stopped_tasks) > 5:
+            click.echo(click.style(f"  ... and {len(stopped_tasks) - 5} more", dim=True))
+
+        click.echo()
 
 
 @cli.command()
 @click.option('--project', help='Filter by project name')
 @click.option('--today', is_flag=True, help='Show only today\'s entries')
 @click.option('--week', is_flag=True, help='Show only this week\'s entries')
-def log(project, today, week):
+@click.option('--compact', is_flag=True, help='Show compact one-line format with task IDs')
+def log(project, today, week, compact):
     """View time logs."""
     store = DataStore()
     tasks = store.get_tasks()
@@ -202,11 +266,11 @@ def log(project, today, week):
             tasks = [t for t in tasks if t.time_entries and
                     datetime.fromisoformat(t.time_entries[0].start_time) >= start_of_week]
 
-    # Only show completed tasks (with total_duration > 0)
-    tasks = [t for t in tasks if t.total_duration > 0]
+    # Show all tasks with time entries
+    tasks = [t for t in tasks if t.time_entries]
 
     if not tasks:
-        click.echo("No completed tasks found.")
+        click.echo("No tasks found.")
         return
 
     # Get all projects for display
@@ -224,11 +288,121 @@ def log(project, today, week):
             start_dt = datetime.fromisoformat(task.time_entries[0].start_time)
             start_time = start_dt.strftime("%Y-%m-%d %H:%M")
 
-        duration = format_duration(task.total_duration)
+        duration = format_duration(task.get_total_duration())
 
-        click.echo(f"  [{start_time}] {click.style(project_name, fg='cyan')} - {task.description}")
-        click.echo(f"    Duration: {click.style(duration, fg='green', bold=True)}")
-        click.echo()
+        if compact:
+            # Compact one-line format with task ID
+            state_indicator = "RUN" if task.is_running() else "STOP"
+            state_color = 'green' if task.is_running() else 'yellow'
+
+            click.echo(f"  {click.style(task.id[:8], dim=True)} | "
+                      f"{click.style(state_indicator, fg=state_color)} | "
+                      f"{click.style(duration, fg='green').ljust(15)} | "
+                      f"[{click.style(project_name, fg='cyan')}] {task.description}")
+        else:
+            # Show task state
+            state_indicator = ""
+            if task.is_running():
+                state_indicator = click.style(" [RUNNING]", fg='green')
+            elif task.is_stopped():
+                state_indicator = click.style(" [STOPPED]", fg='yellow')
+
+            click.echo(f"  [{start_time}] {click.style(project_name, fg='cyan')} - {task.description}{state_indicator}")
+            click.echo(f"    Duration: {click.style(duration, fg='green', bold=True)}")
+            click.echo()
+
+
+@cli.command()
+@click.argument('task_id', required=False)
+def delete(task_id):
+    """Delete a stopped task by ID or select interactively (use ↑↓ arrows)."""
+    store = DataStore()
+
+    # If no task_id provided, show stopped tasks and prompt
+    if not task_id:
+        stopped_tasks = store.get_stopped_tasks()
+
+        if not stopped_tasks:
+            click.echo(click.style("✗ No stopped tasks to delete.", fg='red'))
+            return
+
+        # Build menu options
+        projects = {p.id: p for p in store.get_projects()}
+        menu_items = []
+
+        for task in stopped_tasks:
+            proj = projects.get(task.project_id)
+            project_name = proj.name if proj else "Unknown"
+            duration = format_duration(task.get_total_duration())
+
+            # Show last activity time
+            last_time = ""
+            if task.time_entries:
+                last_entry = task.time_entries[-1]
+                if last_entry.end_time:
+                    last_dt = datetime.fromisoformat(last_entry.end_time)
+                    last_time = last_dt.strftime("%Y-%m-%d %H:%M")
+
+            menu_items.append(f"[{project_name}] {task.description} | {duration} | {last_time}")
+
+        # Show interactive menu
+        click.echo(click.style("\nSelect task to delete (use ↑↓ arrows, Enter to select, q to quit):", bold=True))
+        terminal_menu = TerminalMenu(
+            menu_items,
+            title="Stopped Tasks:",
+            menu_cursor="→ ",
+            menu_cursor_style=("fg_red", "bold"),
+            menu_highlight_style=("bg_red", "fg_black"),
+            cycle_cursor=True,
+            clear_screen=False,
+        )
+
+        menu_entry_index = terminal_menu.show()
+
+        if menu_entry_index is None:
+            click.echo("\nCancelled.")
+            return
+
+        task_id = stopped_tasks[menu_entry_index].id
+
+    # Find task by full or partial ID
+    all_tasks = store.get_tasks()
+    matching_tasks = [t for t in all_tasks if t.id.startswith(task_id)]
+
+    if not matching_tasks:
+        click.echo(click.style(f"✗ Task not found.", fg='red'))
+        return
+
+    if len(matching_tasks) > 1:
+        click.echo(click.style(f"✗ Ambiguous task ID. Multiple tasks match '{task_id}':", fg='red'))
+        for t in matching_tasks:
+            click.echo(f"  {t.id[:8]} - {t.description}")
+        return
+
+    task = matching_tasks[0]
+
+    # Check if task is running
+    if task.is_running():
+        click.echo(click.style(f"✗ Cannot delete a running task. Stop it first.", fg='red'))
+        return
+
+    # Confirm deletion
+    if not click.confirm(click.style("Are you sure you want to delete this task?", fg='yellow')):
+        click.echo("Cancelled.")
+        return
+
+    # Delete the task
+    data = store._load_data()
+    data['tasks'] = [t for t in data['tasks'] if t['id'] != task.id]
+    store._save_data(data)
+
+    # Get project name for display
+    projects = {p.id: p for p in store.get_projects()}
+    project = projects.get(task.project_id)
+    project_name = project.name if project else "Unknown"
+
+    click.echo(click.style(f"✓ Task deleted", fg='green'))
+    click.echo(f"  [{click.style(project_name, fg='cyan')}] {task.description}")
 
 
 @cli.command()
@@ -238,20 +412,20 @@ def summary():
     tasks = store.get_tasks()
     projects = {p.id: p for p in store.get_projects()}
 
-    # Only include completed tasks
-    completed_tasks = [t for t in tasks if t.total_duration > 0]
+    # Include all tasks with time entries
+    all_tasks = [t for t in tasks if t.time_entries]
 
-    if not completed_tasks:
-        click.echo("No completed tasks found.")
+    if not all_tasks:
+        click.echo("No tasks found.")
         return
 
     # Calculate totals per project
     project_totals = {}
-    for task in completed_tasks:
+    for task in all_tasks:
         project_id = task.project_id
         if project_id not in project_totals:
             project_totals[project_id] = 0
-        project_totals[project_id] += task.total_duration
+        project_totals[project_id] += task.get_total_duration()
 
     click.echo(click.style("\nTime Summary:", bold=True))
     click.echo(click.style("─" * 50, dim=True))

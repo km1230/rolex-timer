@@ -1,6 +1,6 @@
 """Timer logic and state management."""
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from models import Task, Project
 from storage import DataStore
 
@@ -18,12 +18,10 @@ class TimerManager:
         Returns:
             Tuple of (success: bool, message: str)
         """
-        # Check if there's already an active task
-        active_task_id = self.store.get_active_task_id()
-        if active_task_id:
-            active_task = self.store.get_task_by_id(active_task_id)
-            if active_task and (active_task.is_running() or active_task.is_paused()):
-                return False, "A timer is already running. Stop or pause it first."
+        # Check if there's already a running task
+        running_task = self.store.get_running_task()
+        if running_task:
+            return False, "A timer is already running. Stop it first."
 
         # Validate project exists
         project = self.store.get_project_by_name(project_name)
@@ -34,112 +32,81 @@ class TimerManager:
         task = Task(project_id=project.id, description=description)
         task.start_entry()
 
-        # Save task and set as active
+        # Save task
         self.store.add_task(task)
-        self.store.set_active_task_id(task.id)
 
         return True, f"Timer started for '{project_name}': {description}"
 
-    def pause_timer(self) -> Tuple[bool, str]:
+    def resume_timer(self, task_id: Optional[str] = None) -> Tuple[bool, str]:
         """
-        Pause the currently running timer.
+        Resume a stopped timer.
+
+        Args:
+            task_id: Specific task to resume. If None, returns list of stopped tasks.
 
         Returns:
             Tuple of (success: bool, message: str)
         """
-        active_task_id = self.store.get_active_task_id()
-        if not active_task_id:
-            return False, "No active timer to pause."
+        # Check if there's already a running task
+        running_task = self.store.get_running_task()
+        if running_task:
+            return False, "A timer is already running. Stop it first."
 
-        task = self.store.get_task_by_id(active_task_id)
-        if not task:
-            return False, "Active task not found."
+        # If task_id provided, resume that specific task
+        if task_id:
+            task = self.store.get_task_by_id(task_id)
+            if not task:
+                return False, f"Task not found."
+            if not task.is_stopped():
+                return False, "Task is not in stopped state."
 
-        if not task.is_running():
-            if task.is_paused():
-                return False, "Timer is already paused."
-            else:
-                return False, "No running timer to pause."
+            task.resume()
+            self.store.update_task(task)
+            return True, "Timer resumed."
 
-        task.pause_current_entry()
-        self.store.update_task(task)
+        # No task_id provided - caller should handle task selection
+        stopped_tasks = self.store.get_stopped_tasks()
+        if not stopped_tasks:
+            return False, "No stopped tasks to resume."
 
-        return True, "Timer paused."
-
-    def resume_timer(self) -> Tuple[bool, str]:
-        """
-        Resume a paused timer.
-
-        Returns:
-            Tuple of (success: bool, message: str)
-        """
-        active_task_id = self.store.get_active_task_id()
-        if not active_task_id:
-            return False, "No active timer to resume."
-
-        task = self.store.get_task_by_id(active_task_id)
-        if not task:
-            return False, "Active task not found."
-
-        if not task.is_paused():
-            if task.is_running():
-                return False, "Timer is already running."
-            else:
-                return False, "No paused timer to resume."
-
-        task.resume_current_entry()
-        self.store.update_task(task)
-
-        return True, "Timer resumed."
+        # Signal to CLI that task selection is needed
+        return False, "Task selection needed."
 
     def stop_timer(self) -> Tuple[bool, str, Optional[Task]]:
         """
-        Stop and finalize the current timer.
+        Stop the currently running timer (keeps it resumable).
 
         Returns:
             Tuple of (success: bool, message: str, task: Optional[Task])
         """
-        active_task_id = self.store.get_active_task_id()
-        if not active_task_id:
-            return False, "No active timer to stop.", None
+        running_task = self.store.get_running_task()
+        if not running_task:
+            return False, "No running timer to stop.", None
 
-        task = self.store.get_task_by_id(active_task_id)
-        if not task:
-            return False, "Active task not found.", None
+        if not running_task.is_running():
+            return False, "Task is not running.", None
 
-        if not task.is_running() and not task.is_paused():
-            return False, "No running or paused timer to stop.", None
+        running_task.stop()
+        self.store.update_task(running_task)
 
-        task.stop_current_entry()
-        self.store.update_task(task)
-        self.store.set_active_task_id(None)
+        return True, "Timer stopped.", running_task
 
-        return True, "Timer stopped.", task
-
-    def get_status(self) -> Tuple[bool, str, Optional[Task], Optional[Project]]:
+    def get_status(self) -> Tuple[bool, str, Optional[Task], Optional[Project], List[Task]]:
         """
-        Get the current timer status.
+        Get timer status including running task and stopped tasks.
 
         Returns:
-            Tuple of (has_active: bool, status: str, task: Optional[Task], project: Optional[Project])
+            Tuple of (has_running: bool, status: str, running_task: Optional[Task],
+                      project: Optional[Project], stopped_tasks: List[Task])
         """
-        active_task_id = self.store.get_active_task_id()
-        if not active_task_id:
-            return False, "No active timer.", None, None
+        running_task = self.store.get_running_task()
+        stopped_tasks = self.store.get_stopped_tasks()
 
-        task = self.store.get_task_by_id(active_task_id)
-        if not task:
-            return False, "Active task not found.", None, None
+        if not running_task:
+            return False, "No running timer.", None, None, stopped_tasks
 
         # Get project info
         projects = self.store.get_projects()
-        project = next((p for p in projects if p.id == task.project_id), None)
+        project = next((p for p in projects if p.id == running_task.project_id), None)
 
-        if task.is_running():
-            status = "running"
-        elif task.is_paused():
-            status = "paused"
-        else:
-            status = "stopped"
-
-        return True, status, task, project
+        return True, "running", running_task, project, stopped_tasks

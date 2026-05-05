@@ -5,6 +5,7 @@ description = "A terminal-based time tracking tool"
 requires-python = ">=3.7"
 dependencies = [
     "click>=8.0.0",
+    "simple-term-menu>=1.6.0",
 ]
 
 [project.scripts]
