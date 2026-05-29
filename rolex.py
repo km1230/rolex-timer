@@ -406,8 +406,10 @@ def delete(task_id):
 
 
 @cli.command()
-def summary():
-    """Summary of all time tracked."""
+@click.option('--today', is_flag=True, help='Show only today\'s summary')
+@click.option('--week', is_flag=True, help='Show only this week\'s summary')
+def summary(today, week):
+    """Summary of time tracked (use --today or --week to filter)."""
     store = DataStore()
     tasks = store.get_tasks()
     projects = {p.id: p for p in store.get_projects()}
@@ -419,15 +421,50 @@ def summary():
         click.echo("No tasks found.")
         return
 
+    # Determine date cutoff for filtering
+    cutoff = None
+    if today or week:
+        now = datetime.utcnow()
+        if today:
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif week:
+            start_of_week = now - timedelta(days=now.weekday())
+            cutoff = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+
     # Calculate totals per project
     project_totals = {}
     for task in all_tasks:
         project_id = task.project_id
         if project_id not in project_totals:
             project_totals[project_id] = 0
-        project_totals[project_id] += task.get_total_duration()
 
-    click.echo(click.style("\nTime Summary:", bold=True))
+        if cutoff:
+            # Only count entries that started within the date range
+            for entry in task.time_entries:
+                entry_start = datetime.fromisoformat(entry.start_time)
+                if entry_start >= cutoff:
+                    project_totals[project_id] += entry.current_duration()
+        else:
+            project_totals[project_id] += task.get_total_duration()
+
+    # Remove projects with no time in the filtered range
+    if cutoff:
+        project_totals = {k: v for k, v in project_totals.items() if v > 0}
+
+    if not project_totals:
+        period = "today" if today else "this week" if week else ""
+        click.echo(f"No time tracked {period}.")
+        return
+
+    # Header
+    if today:
+        title = "Today's Summary:"
+    elif week:
+        title = "This Week's Summary:"
+    else:
+        title = "Time Summary:"
+
+    click.echo(click.style(f"\n{title}", bold=True))
     click.echo(click.style("─" * 50, dim=True))
 
     total_time = 0
