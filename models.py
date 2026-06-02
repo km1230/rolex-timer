@@ -16,7 +16,7 @@ class TimeEntry:
     """Represents a single time entry (start/end)."""
 
     def __init__(self, start_time: Optional[str] = None, end_time: Optional[str] = None):
-        self.start_time = start_time or datetime.utcnow().isoformat()
+        self.start_time = start_time or datetime.now().isoformat()
         self.end_time = end_time
 
     def to_dict(self):
@@ -48,7 +48,7 @@ class TimeEntry:
         if self.end_time:
             end = datetime.fromisoformat(self.end_time)
         else:
-            end = datetime.utcnow()
+            end = datetime.now()
 
         return (end - start).total_seconds()
 
@@ -105,7 +105,7 @@ class Task:
         if self.time_entries:
             last_entry = self.time_entries[-1]
             if not last_entry.end_time:
-                last_entry.end_time = datetime.utcnow().isoformat()
+                last_entry.end_time = datetime.now().isoformat()
 
         self.state = TaskState.STOPPED
 
@@ -147,7 +147,7 @@ class Project:
                  created_at: Optional[str] = None):
         self.id = project_id or str(uuid.uuid4())
         self.name = name
-        self.created_at = created_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or datetime.now().isoformat()
 
     def to_dict(self):
         return {

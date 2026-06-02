@@ -254,17 +254,18 @@ def log(project, today, week, compact):
 
     # Filter by date if specified
     if today or week:
-        now = datetime.utcnow()
+        now = datetime.now()
 
         if today:
-            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            tasks = [t for t in tasks if t.time_entries and
-                    datetime.fromisoformat(t.time_entries[0].start_time) >= start_of_day]
-        elif week:
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
             start_of_week = now - timedelta(days=now.weekday())
-            start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-            tasks = [t for t in tasks if t.time_entries and
-                    datetime.fromisoformat(t.time_entries[0].start_time) >= start_of_week]
+            cutoff = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        tasks = [t for t in tasks if any(
+            datetime.fromisoformat(e.start_time) >= cutoff
+            for e in t.time_entries
+        )]
 
     # Show all tasks with time entries
     tasks = [t for t in tasks if t.time_entries]
@@ -424,7 +425,7 @@ def summary(today, week):
     # Determine date cutoff for filtering
     cutoff = None
     if today or week:
-        now = datetime.utcnow()
+        now = datetime.now()
         if today:
             cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
         elif week:
