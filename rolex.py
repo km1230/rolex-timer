@@ -406,76 +406,123 @@ def delete(task_id):
     click.echo(f"  [{click.style(project_name, fg='cyan')}] {task.description}")
 
 
+def period_key(moment: datetime, by: str):
+    """Return (sort_key, label) for the day/week/month period containing moment."""
+    if by == 'day':
+        return moment.date(), moment.strftime('%Y-%m-%d (%a)')
+    if by == 'month':
+        return (moment.year, moment.month), moment.strftime('%Y-%m')
+    year, week, _ = moment.isocalendar()
+    week_start = (moment - timedelta(days=moment.weekday())).date()
+    week_end = week_start + timedelta(days=6)
+    label = f"{year}-W{week:02d} ({week_start.strftime('%b %d')} – {week_end.strftime('%b %d')})"
+    return (year, week), label
+
+
+def summary_cutoff(today: bool, week: bool) -> Optional[datetime]:
+    """Return the earliest start_time to include for --today / --week, or None."""
+    now = datetime.now()
+    if today:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if week:
+        start_of_week = now - timedelta(days=now.weekday())
+        return start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+    return None
+
+
+def print_project_totals(project_totals: dict, projects: dict, indent: str = '  ') -> float:
+    """Print one line per project sorted by duration and return the total."""
+    total_time = 0
+    for project_id, duration in sorted(project_totals.items(), key=lambda x: x[1], reverse=True):
+        proj = projects.get(project_id)
+        project_name = proj.name if proj else "Unknown"
+        formatted = format_duration(duration)
+        click.echo(f"{indent}{click.style(project_name, fg='cyan')}: {click.style(formatted, fg='green', bold=True)}")
+        total_time += duration
+    return total_time
+
+
 @cli.command()
 @click.option('--today', is_flag=True, help='Show only today\'s summary')
 @click.option('--week', is_flag=True, help='Show only this week\'s summary')
-def summary(today, week):
-    """Summary of time tracked (use --today or --week to filter)."""
+@click.option('--project', 'project_name', help='Filter by project name')
+@click.option('--daily', is_flag=True, help='Group totals by day')
+@click.option('--weekly', is_flag=True, help='Group totals by week')
+@click.option('--monthly', is_flag=True, help='Group totals by month')
+def summary(today, week, project_name, daily, weekly, monthly):
+    """Summary of time tracked (--today/--week to filter, --daily/--weekly/--monthly to group)."""
+    grouping = [name for name, flag in (('day', daily), ('week', weekly), ('month', monthly)) if flag]
+    if len(grouping) > 1:
+        click.echo(click.style("Use only one of --daily, --weekly or --monthly.", fg='red'))
+        return
+    by = grouping[0] if grouping else None
+
     store = DataStore()
-    tasks = store.get_tasks()
     projects = {p.id: p for p in store.get_projects()}
 
-    # Include all tasks with time entries
+    project_filter = None
+    if project_name:
+        project_filter = store.get_project_by_name(project_name)
+        if not project_filter:
+            click.echo(click.style(f"Project '{project_name}' not found.", fg='red'))
+            return
+
+    tasks = store.get_tasks(project_filter.id if project_filter else None)
     all_tasks = [t for t in tasks if t.time_entries]
 
     if not all_tasks:
         click.echo("No tasks found.")
         return
 
-    # Determine date cutoff for filtering
-    cutoff = None
-    if today or week:
-        now = datetime.now()
-        if today:
-            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif week:
-            start_of_week = now - timedelta(days=now.weekday())
-            cutoff = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = summary_cutoff(today, week)
 
-    # Calculate totals per project
-    project_totals = {}
+    periods = {}
     for task in all_tasks:
-        project_id = task.project_id
-        if project_id not in project_totals:
-            project_totals[project_id] = 0
+        for entry in task.time_entries:
+            entry_start = datetime.fromisoformat(entry.start_time)
+            if cutoff and entry_start < cutoff:
+                continue
+            duration = entry.current_duration()
+            if duration <= 0:
+                continue
+            key, label = period_key(entry_start, by) if by else (None, None)
+            bucket = periods.setdefault(key, {'label': label, 'totals': {}})
+            bucket['totals'][task.project_id] = bucket['totals'].get(task.project_id, 0) + duration
 
-        if cutoff:
-            # Only count entries that started within the date range
-            for entry in task.time_entries:
-                entry_start = datetime.fromisoformat(entry.start_time)
-                if entry_start >= cutoff:
-                    project_totals[project_id] += entry.current_duration()
-        else:
-            project_totals[project_id] += task.get_total_duration()
-
-    # Remove projects with no time in the filtered range
-    if cutoff:
-        project_totals = {k: v for k, v in project_totals.items() if v > 0}
-
-    if not project_totals:
-        period = "today" if today else "this week" if week else ""
-        click.echo(f"No time tracked {period}.")
+    if not periods:
+        period = " today" if today else " this week" if week else ""
+        click.echo(f"No time tracked{period}.")
         return
 
-    # Header
     if today:
-        title = "Today's Summary:"
+        title = "Today's Summary"
     elif week:
-        title = "This Week's Summary:"
+        title = "This Week's Summary"
     else:
-        title = "Time Summary:"
+        title = "Time Summary"
+    if by:
+        title += f" by {by}"
+    if project_filter:
+        title = f"{project_filter.name} — {title}"
 
-    click.echo(click.style(f"\n{title}", bold=True))
+    click.echo(click.style(f"\n{title}:", bold=True))
     click.echo(click.style("─" * 50, dim=True))
 
     total_time = 0
-    for project_id, duration in sorted(project_totals.items(), key=lambda x: x[1], reverse=True):
-        proj = projects.get(project_id)
-        project_name = proj.name if proj else "Unknown"
-
-        formatted = format_duration(duration)
-        click.echo(f"  {click.style(project_name, fg='cyan')}: {click.style(formatted, fg='green', bold=True)}")
-        total_time += duration
+    if not by:
+        total_time = print_project_totals(periods[None]['totals'], projects)
+    else:
+        for key in sorted(periods):
+            bucket = periods[key]
+            if project_filter:
+                duration = sum(bucket['totals'].values())
+                click.echo(f"  {click.style(bucket['label'], fg='cyan')}: {click.style(format_duration(duration), fg='green', bold=True)}")
+                total_time += duration
+            else:
+                click.echo(click.style(f"  {bucket['label']}", fg='yellow', bold=True))
+                subtotal = print_project_totals(bucket['totals'], projects, indent='    ')
+                click.echo(f"    {click.style('Subtotal', dim=True)}: {click.style(format_duration(subtotal), fg='green')}")
+                total_time += subtotal
 
     click.echo(click.style("─" * 50, dim=True))
     click.echo(f"  {click.style('Total', bold=True)}: {click.style(format_duration(total_time), fg='green', bold=True)}")

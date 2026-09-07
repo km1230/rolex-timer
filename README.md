@@ -112,6 +112,17 @@ rolex log --week
 
 # View summary of all tracked time
 rolex summary
+
+# View summary for a single project
+rolex summary --project "Client Work"
+
+# Break the summary down by day, week or month
+rolex summary --weekly
+rolex summary --daily --project "Client Work"
+rolex summary --monthly
+
+# Combine with --today / --week to limit the range
+rolex summary --week --daily
 ```
 
 ### Task Management
