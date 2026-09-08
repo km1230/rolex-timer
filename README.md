@@ -144,6 +144,15 @@ rolex log --compact          # Find task ID
 rolex delete 7e9585ef        # Delete specific task
 ```
 
+```bash
+# Edit a task description interactively (arrow key menu, includes running task)
+rolex edit
+
+# Or edit by ID directly, with or without the new description
+rolex edit 7e9585ef
+rolex edit 7e9585ef -d "New description"
+```
+
 ## Data Storage
 
 Time tracking data is stored in `~/.rolex-timer/data.json`

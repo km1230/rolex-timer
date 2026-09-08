@@ -406,6 +406,92 @@ def delete(task_id):
     click.echo(f"  [{click.style(project_name, fg='cyan')}] {task.description}")
 
 
+@cli.command()
+@click.argument('task_id', required=False)
+@click.option('-d', '--description', help='New task description')
+def edit(task_id, description):
+    """Edit a task description by ID or select interactively (use ↑↓ arrows)."""
+    store = DataStore()
+    projects = {p.id: p for p in store.get_projects()}
+
+    if not task_id:
+        all_tasks = store.get_tasks()
+        all_tasks.sort(key=lambda t: t.last_activity_time() or '', reverse=True)
+
+        if not all_tasks:
+            click.echo(click.style("✗ No tasks to edit.", fg='red'))
+            return
+
+        menu_items = []
+        for task in all_tasks:
+            proj = projects.get(task.project_id)
+            project_name = proj.name if proj else "Unknown"
+            duration = format_duration(task.get_current_duration())
+            state_indicator = " ⏱" if task.is_running() else ""
+
+            last_time = ""
+            last_activity = task.last_activity_time()
+            if last_activity:
+                last_time = datetime.fromisoformat(last_activity).strftime("%Y-%m-%d %H:%M")
+
+            menu_items.append(f"[{project_name}] {task.description}{state_indicator} | {duration} | {last_time}")
+
+        click.echo(click.style("\nSelect task to edit (use ↑↓ arrows, Enter to select, q to quit):", bold=True))
+        terminal_menu = TerminalMenu(
+            menu_items,
+            title="Tasks:",
+            menu_cursor="→ ",
+            menu_cursor_style=("fg_yellow", "bold"),
+            menu_highlight_style=("bg_yellow", "fg_black"),
+            cycle_cursor=True,
+            clear_screen=False,
+        )
+
+        menu_entry_index = terminal_menu.show()
+
+        if menu_entry_index is None:
+            click.echo("\nCancelled.")
+            return
+
+        task_id = all_tasks[menu_entry_index].id
+
+    matching_tasks = [t for t in store.get_tasks() if t.id.startswith(task_id)]
+
+    if not matching_tasks:
+        click.echo(click.style(f"✗ Task not found.", fg='red'))
+        return
+
+    if len(matching_tasks) > 1:
+        click.echo(click.style(f"✗ Ambiguous task ID. Multiple tasks match '{task_id}':", fg='red'))
+        for t in matching_tasks:
+            click.echo(f"  {t.id[:8]} - {t.description}")
+        return
+
+    task = matching_tasks[0]
+    old_description = task.description
+
+    if description is None:
+        description = click.prompt("New description", default=old_description)
+
+    description = description.strip()
+    if not description:
+        click.echo(click.style("✗ Description cannot be empty.", fg='red'))
+        return
+
+    if description == old_description:
+        click.echo("No changes.")
+        return
+
+    task.description = description
+    store.update_task(task)
+
+    project = projects.get(task.project_id)
+    project_name = project.name if project else "Unknown"
+
+    click.echo(click.style(f"✓ Task updated", fg='green'))
+    click.echo(f"  [{click.style(project_name, fg='cyan')}] {old_description} → {description}")
+
+
 def period_key(moment: datetime, by: str):
     """Return (sort_key, label) for the day/week/month period containing moment."""
     if by == 'day':
